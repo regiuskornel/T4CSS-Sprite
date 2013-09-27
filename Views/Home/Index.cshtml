@@ -1,0 +1,64 @@
+﻿@using MvcApp
+@using MvcApp.Content.Images
+@{
+    ViewBag.Title = "Index";
+}
+
+<link href="~/Content/SpriteVar.css" rel="stylesheet" />
+
+<style type="text/css">
+    .t4button {
+        display: inline-block;
+        text-decoration: none;
+        padding: 4px;
+        border: 1px solid #ddd;
+        border-radius: 6px;
+        box-shadow: #ddd 0 0 6px;
+    }
+
+    .t4icon {
+        display: block;
+        margin: 0 auto;
+        text-indent: -99999px;
+        overflow: hidden;
+    }
+
+    .t4button-text {
+        display: block;
+    }
+</style>
+<h2>T4 Sprite and ActionLink demo</h2>
+<table>
+    <tr>
+        <th>Mode</th>
+        <th>Normal</th>
+        <th>Disabled</th>
+    </tr>
+    <tr>
+        <td>Text & Icon</td>
+        <td>@Html.UIActionLink(SpriteVar.t4block, "Block button", "Index", "Home", null, null, T4ButtonHelper.ButtonMode.Default)</td>
+        <td>@Html.UIActionLink(SpriteVar.t4block, "Block button", "Index", "Home", null, null, T4ButtonHelper.ButtonMode.Disabled)</td>
+    </tr>
+    <tr>
+        <td>Icon & Title</td>
+        <td>@Html.UIActionLink(SpriteVar.t4help, "Help button", "Index", "Home", null, null, T4ButtonHelper.ButtonMode.Default | T4ButtonHelper.ButtonMode.IconOnly)</td>
+        <td>@Html.UIActionLink(SpriteVar.t4help, "Help button", "Index", "Home", null, null, T4ButtonHelper.ButtonMode.Disabled | T4ButtonHelper.ButtonMode.IconOnly)</td>
+    </tr>
+    <tr>
+        <td>Icon & Title 16x16</td>
+        <td>@Html.UIActionLink(SpriteVar.t4clock, "Clock button 16", "Index", "Home", null, null, T4ButtonHelper.ButtonMode.Default | T4ButtonHelper.ButtonMode.IconOnly, "image16")</td>
+        <td>@Html.UIActionLink(SpriteVar.t4clock, "Clock button 16 (we don not have disabled variant)", "Index", "Home", null, null, T4ButtonHelper.ButtonMode.Disabled | T4ButtonHelper.ButtonMode.IconOnly, "image16")</td>
+    </tr>
+    <tr>
+        <td>Icon & Title 24x24</td>
+        <td>@Html.UIActionLink(SpriteVar.t4clock, "Clock button 24", "Index", "Home", null, null, T4ButtonHelper.ButtonMode.Default | T4ButtonHelper.ButtonMode.IconOnly, "image24")</td>
+        <td>@Html.UIActionLink(SpriteVar.t4clock, "Clock button 24", "Index", "Home", null, null, T4ButtonHelper.ButtonMode.Disabled | T4ButtonHelper.ButtonMode.IconOnly, "image24")</td>
+    </tr>
+    <tr>
+        <td>Icon & Title original size</td>
+        <td>@Html.UIActionLink(SpriteVar.t4clock, "Clock button original size", "Index", "Home", null, null, T4ButtonHelper.ButtonMode.Default | T4ButtonHelper.ButtonMode.IconOnly)</td>
+        <td>@Html.UIActionLink(SpriteVar.t4clock, "Clock button original size", "Index", "Home", null, null, T4ButtonHelper.ButtonMode.Disabled | T4ButtonHelper.ButtonMode.IconOnly)</td>
+    </tr>
+</table>
+<br /><br />
+All icons by <a href="http://dryicons.com">http://dryicons.com</a>

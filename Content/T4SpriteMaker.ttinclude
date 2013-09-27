@@ -1,0 +1,1463 @@
+﻿/* T4 Sprite Creator written by Kornél Regius (www.cornelius.hu) based on:
+    CPOL Image Sprite Creator V2.0 by AlexCode http://www.codeproject.com/script/Membership/View.aspx?mid=361529
+    http://www.codeproject.com/Articles/140251/Image-Sprites-and-CSS-Classes-Creator
+    And CPL by Copyright (C) 2002-2011 Nuclex Development Labs for Rectangle Packager
+*/
+
+<#@ assembly name="System.Core" #>
+<#@ assembly name="Microsoft.VisualStudio.Shell.Interop" #>
+<#@ assembly name="EnvDTE" #>
+<#@ assembly name="EnvDTE80" #>
+<#@ assembly name="VSLangProj" #>
+<#@ assembly name="System.Drawing" #>
+<#@ import namespace="System.Drawing"#>
+<#@ import namespace="System.CodeDom"#>
+<#@ import namespace="System.CodeDom.Compiler"#>
+<#@ import namespace="System.Collections.Generic" #>
+<#@ import namespace="System.IO" #>
+<#@ import namespace="System.Linq" #>
+<#@ import namespace="System.Text" #>
+<#@ import namespace="System.Text.RegularExpressions" #>
+<#@ import namespace="Microsoft.VisualStudio.Shell.Interop" #>
+<#@ import namespace="EnvDTE" #>
+<#@ import namespace="Microsoft.VisualStudio.TextTemplating" #>
+<#+
+
+    static DTE Dte;
+    static Project Project;
+    //static string AppRoot;
+    static string T4FileName;
+    static string T4Folder;
+
+    void PrepareDataToRender(TextTransformation tt)
+    {
+        T4FileName = Path.GetFileName(Host.TemplateFile);
+        T4Folder = Path.GetDirectoryName(Host.TemplateFile);
+        var serviceProvider = Host as IServiceProvider;
+        if (serviceProvider != null)
+            Dte = (EnvDTE.DTE)serviceProvider.GetService(typeof(EnvDTE.DTE));
+
+        if (Dte == null)
+            throw new Exception("Can only execute through the Visual Studio host");
+
+        Project = GetProjectContainingT4File(Dte);
+
+        if (Project == null)
+        {
+            Error("Could not find the VS Project containing the T4 file.");
+            return;
+        }
+        //AppRoot = Path.GetDirectoryName(Project.FullName) + '\\';
+    }
+
+    
+    Project GetProjectContainingT4File(DTE dte)
+    {
+        ProjectItem projectItem = dte.Solution.FindProjectItem(Host.TemplateFile);
+        if (projectItem.Document == null)
+            projectItem.Open(EnvDTE.Constants.vsViewKindCode);
+        return projectItem.ContainingProject;
+    }
+  	
+    public class SCEngine
+    {
+        SCEngineOptions _options = null;
+        private SCEngineOptions Options { get { return _options; } }
+
+        public SCEngineResult GenerateSprite(SCEngineOptions options)
+        {
+            _options = options;
+
+            List<SpriteImageItem> imageBlocks;
+            Size spriteSize;
+            //System.Diagnostics.Debugger.Launch();
+            //System.Diagnostics.Debugger.Break();
+
+            GetImagesInfo(out imageBlocks, out spriteSize);
+            if (imageBlocks.Count == 0)
+                throw new InvalidOperationException("Couldn't find any image in "+options.SourceDirectory);
+
+            System.Drawing.Imaging.ImageAttributes imgattr = null;
+            if (options.VariantGreyScalePresents)
+            {
+                System.Drawing.Imaging.ColorMatrix colorMatrix= new System.Drawing.Imaging.ColorMatrix(
+                    new [] {
+                        new [] { 0.3f,  0.3f,  0.3f, 0f, 0f},
+                        new [] {0.59f, 0.59f, 0.59f, 0f, 0f},
+                        new [] {0.11f, 0.11f, 0.11f, 0f, 0f},
+                        new [] {0f,       0f,    0f, 1f, 0f},
+                        new [] {0f,       0f,    0f, 0f, 1f}
+                        });
+                imgattr = new System.Drawing.Imaging.ImageAttributes();
+                imgattr.SetColorMatrix(colorMatrix);
+            }
+
+            Bitmap sprite = new Bitmap(spriteSize.Width, spriteSize.Height); 
+            SCEngineResult result = new SCEngineResult(sprite);
+
+            using(Graphics g = Graphics.FromImage(sprite))
+            {
+                g.CompositingQuality = System.Drawing.Drawing2D.CompositingQuality.HighQuality;
+                g.CompositingMode = System.Drawing.Drawing2D.CompositingMode.SourceCopy;
+                g.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.NearestNeighbor;
+                g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.HighQuality;
+                result.SbCss.AppendFormat(".{0}{1}{{ background-image: url(\"{1}.png\")}}{2}",options.CssClassPrefix, options.FilesName,Environment.NewLine);
+                result.SbHtml.AppendLine("<html><head><LINK REL=StyleSheet HREF=\"" + options.FilesName + ".css\" TYPE=\"text/css\"><style>td,th{border: 1px dotted #eee;text-align: center;}."+options.CssClassPrefix + options.FilesName+"{display: inline-block;}</style></head><body>");
+                
+                //For free icon licence:
+                result.SbHtml.AppendLine("All icons by <a href=\"http://dryicons.com\">http://dryicons.com</a><br /><br />");
+                
+                result.SbHtml.AppendLine("<table border=0><tr><th>Name</th><th>Image</th>");
+                
+                //ImageVariants display names
+                foreach(var imv in options.ImageVariants)
+                    result.SbHtml.AppendFormat("<th>{0}</th>", imv.DisplayName);
+
+                result.SbHtml.AppendLine("</tr>");
+                for (int i = 0; i < imageBlocks.Count; i++)
+                {
+                    SpriteImageItem infobox=imageBlocks[i];
+                    if (infobox.Variant != null) continue; //Working with normal image
+
+                    var img = new Bitmap(infobox.Image);
+                    var pd = img.PhysicalDimension;
+
+                    img.SetResolution(sprite.HorizontalResolution, sprite.VerticalResolution);
+                    string className = options.CssClassPrefix + Path.GetFileNameWithoutExtension(infobox.Name).Replace(" ", "_").Replace("-","_");
+
+                    MakeNormalImage(img, spriteSize.Height, infobox, g, result, className);
+
+                    foreach(ImageVariant imv in options.ImageVariants)
+                    {
+                        SpriteImageItem foundinfobox = FindVariant(imv, imageBlocks, i);
+                        if (foundinfobox != null)
+                            MakeImageVariant(img, spriteSize.Height, foundinfobox, g, result, className, imgattr);
+                    }
+                    result.SbHtml.AppendFormat("</tr>{0}", Environment.NewLine);
+                    // create static string names
+                    result.SbStaticNames.AppendFormat("public const string {0} = \"{0}\";{1}",className, Environment.NewLine);
+                }
+            }
+            result.SbHtml.AppendLine("</table></body></html>");
+            for (int i = 0; i < imageBlocks.Count; i++)
+            {
+                SpriteImageItem infobox=imageBlocks[i];
+                if (infobox.Variant != null) continue; //Just normals enought, others have same reference
+                if (infobox.Image != null)
+                    infobox.Image.Dispose();
+            }
+            return result;
+        }
+
+        private SpriteImageItem FindVariant(ImageVariant vari, List<SpriteImageItem> imageBlocks, int currentIndex)
+        {
+            SpriteImageItem foundinfobox= null;
+            for(int s=0;s<imageBlocks.Count; s++)
+            {
+                if (imageBlocks[s].ParentIndex == currentIndex && imageBlocks[s].Variant == vari) //Current
+                    return imageBlocks[s];
+            }
+            return null;
+        }
+
+        private void MakeNormalImage(Bitmap img, int spriteHeight, SpriteImageItem infobox, Graphics g, SCEngineResult result, string className )
+        {
+            var location = new Point(infobox.Position.X, infobox.Position.Y);
+            g.DrawImage(img, location);
+
+            // create css class
+            result.SbCss.AppendFormat(".{0}{{background-position:{1}px {2}px;width: {3}px;height: {4}px;}}{5}",
+                className,
+                (-infobox.Position.X).ToString(),
+                (-infobox.Position.Y - spriteHeight).ToString(),
+                infobox.ImageSize.Width.ToString(),
+                infobox.ImageSize.Height.ToString(),
+                Environment.NewLine
+                );
+            // create sample html page
+            result.SbHtml.AppendFormat("<tr><td>{0}</td>{1}",className,Environment.NewLine);
+            result.SbHtml.AppendFormat("<td><span class=\"{0} {1}\">&nbsp;</span></td>",this.Options.CssClassPrefix + this.Options.FilesName, className);
+        }
+
+        private void MakeImageVariant(Bitmap img, int spriteHeight, SpriteImageItem infobox, Graphics g, SCEngineResult result, string className, System.Drawing.Imaging.ImageAttributes imgattr)
+        {
+            var location = new Point(infobox.Position.X, infobox.Position.Y);
+            Image tmpImage;
+            if (infobox.Variant.Width !=0) //Resize
+                tmpImage = Resize(img, infobox.ImageSize);
+            else
+                tmpImage = img;
+
+            if (infobox.Variant.GreyScale)
+                g.DrawImage(tmpImage, new Rectangle(location, infobox.ImageSize), 0, 0, infobox.ImageSize.Width,infobox.ImageSize.Height, GraphicsUnit.Pixel, imgattr);
+            else{
+                g.DrawImage(tmpImage, new Rectangle(location, infobox.ImageSize), 0, 0, infobox.ImageSize.Width,infobox.ImageSize.Height, GraphicsUnit.Pixel);
+                tmpImage.Dispose();
+            }
+
+            result.SbCss.AppendFormat(".{0}.{6}{{background-position:{1}px {2}px;width: {3}px;height: {4}px;}}{5}",
+                className,
+                (-infobox.Position.X).ToString(),
+                (-infobox.Position.Y - spriteHeight).ToString(),
+                infobox.ImageSize.Width.ToString(),
+                infobox.ImageSize.Height.ToString(),
+                Environment.NewLine,
+                infobox.Variant.CssClassName.Replace(" ",".") //multiple class provided
+                );
+
+            result.SbHtml.AppendFormat("<td><span class=\"{0} {1} {2}\">&nbsp;</span></td>",Options.CssClassPrefix + Options.FilesName, className, infobox.Variant.CssClassName);
+        }
+
+        private Image Resize(Image srcImage, Size size)
+        {
+            Bitmap newImage = new Bitmap(size.Width,size.Height);
+            using (Graphics gr = Graphics.FromImage(newImage))
+            {
+                gr.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.HighQuality;
+                gr.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.HighQualityBicubic;
+                gr.PixelOffsetMode = System.Drawing.Drawing2D.PixelOffsetMode.HighQuality;
+                gr.DrawImage(srcImage, new Rectangle(Point.Empty, size));
+            }
+            return newImage;
+        }
+
+        /// <summary>
+        /// Returns a list with the image files available to be added to the sprite
+        /// </summary>
+        /// <returns></returns>
+        private List<FileInfo> GetFiles()
+        {
+            DirectoryInfo dir = new DirectoryInfo(Options.SourceDirectory);
+            if (!dir.Exists)
+                throw new InvalidOperationException("Source files directory not found! " + Options.SourceDirectory);
+
+            List<FileInfo> files = dir.GetFiles("*.*", SearchOption.TopDirectoryOnly).ToList();
+            files = (from f in files
+                    where(Path.GetFileNameWithoutExtension(f.Name) != Options.FilesName) &&
+                        (f.Name.EndsWith(".jpg", StringComparison.InvariantCultureIgnoreCase) ||
+                        f.Name.EndsWith(".jpeg", StringComparison.InvariantCultureIgnoreCase) ||
+                        f.Name.EndsWith(".png", StringComparison.InvariantCultureIgnoreCase) ||
+                        f.Name.EndsWith(".bmp", StringComparison.InvariantCultureIgnoreCase))
+                    orderby f.Name
+                    select f).ToList();
+            return files;
+        }
+
+        /// <summary>
+        /// Collect information about the images and bin pack them using the chosen algorithm
+        /// </summary>
+        /// <param name="imagesInfo"></param>
+        /// <param name="spriteSize"></param>
+        public void GetImagesInfo(out List<SpriteImageItem> imagesInfo, out Size spriteSize)
+        {
+            imagesInfo = new List<SpriteImageItem>();
+
+            // calculate initial sprite size to optimize process speed
+            //	-> make sure that the widest and the tallest images fit
+            //	-> make sure the resulting area is the same as the sum of all images area
+            int maxW = 0;
+            int maxH = 0;
+            int imageindex = 0;
+            int increment = Options.ImageVariants.Count() + 1;
+
+            foreach (var file in GetFiles())
+            {
+                try
+                {
+                    var image = Image.FromFile(file.FullName);
+                
+                    imagesInfo.Add(new SpriteImageItem() { Image = image, Name = file.Name, ImageSize = image.Size });
+                    if (image.Width > maxW) maxW = image.Width;
+                    if (image.Height > maxH) maxH = image.Height;
+
+                    foreach (ImageVariant imv in Options.ImageVariants)
+                    {
+                        if (imv.Width == 0) //Resize not required
+                            imagesInfo.Add(new SpriteImageItem() { Image = image, Name = file.Name, Variant = imv, ParentIndex = imageindex, ImageSize = image.Size });
+                        else {
+                            imagesInfo.Add(new SpriteImageItem() { Image = image, Name = file.Name, Variant = imv, ParentIndex = imageindex, ImageSize = new Size(imv.Width, imv.Height) });
+                            if (imv.Width > maxW) maxW = image.Width;
+                            if (imv.Height > maxH) maxH = image.Height;
+                        }
+                    
+                    }
+                }
+                catch(Exception ex)
+                {
+                    throw new InvalidDataException("Invalid image: " + file.FullName);
+                }
+                imageindex += increment;
+            }
+
+
+            int finalW = 0;
+            int finalH = 0;
+
+            finalW = maxW;// maxW > totalW ? maxW : totalW;
+            finalH = maxH; // maxH > totalH ? maxH : totalH;
+
+            //"Initial sprite size to: {0} x {1}", finalW, finalH;
+            List<SpriteImageItem> unfitImagesInfo = new List<SpriteImageItem>();
+
+            RectanglePacker packer = null;
+
+            // start packing process
+            bool finished = false;
+            while (!finished)
+            {
+                switch (this.Options.BinPackingLevel)
+                {
+                    default:
+                    case 1:		// faster and less compless algorithm
+                        packer = new SimpleRectanglePacker(finalW, finalH);
+                        break;
+                    case 2:		// still fast and much better packing algorithm
+                        packer = new CygonRectanglePacker(finalW, finalH);
+                        break;
+                    case 3:		// the best packing algorithm. Addicional processing time might not be noticeable
+                        packer = new ArevaloRectanglePacker(finalW, finalH);
+                        break;
+                }
+                var usedArea = 0;
+                foreach (var iInfo in imagesInfo)
+                {
+                    // Find a place for a rectangle of size 30x20 in the packing area
+                    Point placement;
+                    if (packer.TryPack(iInfo.ImageSize.Width, iInfo.ImageSize.Height, out placement))
+                    {
+                        iInfo.Position = placement;
+                        usedArea += iInfo.ImageSize.Width * iInfo.ImageSize.Height;
+                    }
+                    else
+                    {
+                        unfitImagesInfo.Add(iInfo);
+                    }
+                }
+
+                if (unfitImagesInfo.Count == 0)
+                {
+                    finished = true;
+                }
+                else
+                {
+                    // after some tests the speed and result are quite the same as adding a few more pixels to the 
+                    //	sprite final size and run the whole process again
+                    finalW += 10;
+                    finalH += 10;
+
+                    unfitImagesInfo.Clear();
+                }
+            }
+
+            spriteSize = new Size(finalW, finalH);
+        }
+    }
+
+
+    public class OutOfSpaceException : Exception
+    {
+
+        /// <summary>Initializes the exception</summary>
+        public OutOfSpaceException() { }
+
+        /// <summary>Initializes the exception with an error message</summary>
+        /// <param name="message">Error message describing the cause of the exception</param>
+        public OutOfSpaceException(string message) : base(message) { }
+
+        /// <summary>Initializes the exception as a followup exception</summary>
+        /// <param name="message">Error message describing the cause of the exception</param>
+        /// <param name="inner">Preceding exception that has caused this exception</param>
+        public OutOfSpaceException(string message, Exception inner) : base(message, inner) { }
+    }
+
+    public abstract class RectanglePacker
+    {
+        /// <summary>Initializes a new rectangle packer</summary>
+        /// <param name="packingAreaWidth">Width of the packing area</param>
+        /// <param name="packingAreaHeight">Height of the packing area</param>
+        protected RectanglePacker(int packingAreaWidth, int packingAreaHeight)
+        {
+            this.packingAreaWidth = packingAreaWidth;
+            this.packingAreaHeight = packingAreaHeight;
+        }
+
+        /// <summary>Allocates space for a rectangle in the packing area</summary>
+        /// <param name="rectangleWidth">Width of the rectangle to allocate</param>
+        /// <param name="rectangleHeight">Height of the rectangle to allocate</param>
+        /// <returns>The location at which the rectangle has been placed</returns>
+        public virtual Point Pack(int rectangleWidth, int rectangleHeight)
+        {
+            Point point;
+
+            if (!TryPack(rectangleWidth, rectangleHeight, out point))
+                throw new OutOfSpaceException("Rectangle does not fit in packing area");
+
+            return point;
+        }
+
+        /// <summary>Tries to allocate space for a rectangle in the packing area</summary>
+        /// <param name="rectangleWidth">Width of the rectangle to allocate</param>
+        /// <param name="rectangleHeight">Height of the rectangle to allocate</param>
+        /// <param name="placement">Output parameter receiving the rectangle's placement</param>
+        /// <returns>True if space for the rectangle could be allocated</returns>
+        public abstract bool TryPack(
+        int rectangleWidth, int rectangleHeight, out Point placement
+        );
+
+        /// <summary>Maximum width the packing area is allowed to have</summary>
+        protected int PackingAreaWidth
+        {
+            get { return this.packingAreaWidth; }
+        }
+
+        /// <summary>Maximum height the packing area is allowed to have</summary>
+        protected int PackingAreaHeight
+        {
+            get { return this.packingAreaHeight; }
+        }
+
+        /// <summary>Maximum allowed width of the packing area</summary>
+        private int packingAreaWidth;
+        /// <summary>Maximum allowed height of the packing area</summary>
+        private int packingAreaHeight;
+
+    }
+
+    public class SimpleRectanglePacker : RectanglePacker
+    {
+        /// <summary>Initializes a new rectangle packer</summary>
+        /// <param name="packingAreaWidth">Maximum width of the packing area</param>
+        /// <param name="packingAreaHeight">Maximum height of the packing area</param>
+        public SimpleRectanglePacker(int packingAreaWidth, int packingAreaHeight) :
+        base(packingAreaWidth, packingAreaHeight) { }
+
+        /// <summary>Tries to allocate space for a rectangle in the packing area</summary>
+        /// <param name="rectangleWidth">Width of the rectangle to allocate</param>
+        /// <param name="rectangleHeight">Height of the rectangle to allocate</param>
+        /// <param name="placement">Output parameter receiving the rectangle's placement</param>
+        /// <returns>True if space for the rectangle could be allocated</returns>
+        public override bool TryPack(
+            int rectangleWidth, int rectangleHeight, out Point placement
+            )
+        {
+
+            // If the rectangle is larger than the packing area in any dimension,
+            // it will never fit!
+            if (
+                (rectangleWidth > PackingAreaWidth) || (rectangleHeight > PackingAreaHeight)
+                )
+            {
+                placement = new Point(0, 0);
+                return false;
+            }
+
+            // Do we have to start a new line ?
+            if (this.column + rectangleWidth > PackingAreaWidth)
+            {
+                this.currentLine += this.lineHeight;
+                this.lineHeight = 0;
+                this.column = 0;
+            }
+
+            // If it doesn't fit vertically now, the packing area is considered full
+            if (this.currentLine + rectangleHeight > PackingAreaHeight)
+            {
+                placement = new Point(0, 0);
+                return false;
+            }
+
+            // The rectangle appears to fit at the current location
+            placement = new Point(this.column, this.currentLine);
+
+            this.column += rectangleWidth; // Can be larger than cache width till next run
+            if (rectangleHeight > this.lineHeight)
+                this.lineHeight = rectangleHeight;
+
+            return true;
+
+        }
+
+        /// <summary>Current packing line</summary>
+        private int currentLine;
+        /// <summary>Height of the current packing line</summary>
+        private int lineHeight;
+        /// <summary>Current column in the current packing line</summary>
+        private int column;
+
+    }
+
+    /// <summary>Packer using a custom algorithm by Markus 'Cygon' Ewald</summary>
+    /// <remarks>
+    ///   <para>
+    ///     Algorithm conceived by Markus Ewald (cygon at nuclex dot org), though
+    ///     I'm quite sure I'm not the first one to come up with it :)
+    ///   </para>
+    ///   <para>
+    ///     The algorithm always places rectangles as low as possible in the packing
+    ///     area. So, for any new rectangle that is to be added, the packer has to
+    ///     determine the X coordinate at which the rectangle can have the lowest
+    ///     overall height without intersecting any other rectangles.
+    ///   </para>
+    ///   <para>
+    ///     To quickly discover these locations, the packer uses a sophisticated
+    ///     data structure that stores the upper silhouette of the packing area. When
+    ///     a new rectangle needs to be added, only the silouette edges need to be
+    ///     analyzed to find the position where the rectangle would achieve the lowest
+    ///     placement possible in the packing area.
+    ///   </para>
+    /// </remarks>
+    public class CygonRectanglePacker : RectanglePacker
+    {
+
+        #region class SliceStartComparer
+
+        /// <summary>Compares the starting position of height slices</summary>
+        private class SliceStartComparer : IComparer<Point>
+        {
+
+            /// <summary>Provides a default instance for the anchor rank comparer</summary>
+            public static SliceStartComparer Default = new SliceStartComparer();
+
+            /// <summary>Compares the starting position of two height slices</summary>
+            /// <param name="left">Left slice start that will be compared</param>
+            /// <param name="right">Right slice start that will be compared</param>
+            /// <returns>The relation of the two slice starts ranks to each other</returns>
+            public int Compare(Point left, Point right)
+            {
+                return left.X - right.X;
+            }
+
+        }
+
+        #endregion
+
+        /// <summary>Initializes a new rectangle packer</summary>
+        /// <param name="packingAreaWidth">Maximum width of the packing area</param>
+        /// <param name="packingAreaHeight">Maximum height of the packing area</param>
+        public CygonRectanglePacker(int packingAreaWidth, int packingAreaHeight) :
+            base(packingAreaWidth, packingAreaHeight)
+        {
+
+            this.heightSlices = new List<Point>();
+
+            // At the beginning, the packing area is a single slice of height 0
+            this.heightSlices.Add(new Point(0, 0));
+        }
+
+        /// <summary>Tries to allocate space for a rectangle in the packing area</summary>
+        /// <param name="rectangleWidth">Width of the rectangle to allocate</param>
+        /// <param name="rectangleHeight">Height of the rectangle to allocate</param>
+        /// <param name="placement">Output parameter receiving the rectangle's placement</param>
+        /// <returns>True if space for the rectangle could be allocated</returns>
+        public override bool TryPack(
+            int rectangleWidth, int rectangleHeight, out Point placement
+            )
+        {
+            // If the rectangle is larger than the packing area in any dimension,
+            // it will never fit!
+            if (
+                (rectangleWidth > PackingAreaWidth) || (rectangleHeight > PackingAreaHeight)
+                )
+            {
+                placement = new Point(0, 0);
+                return false;
+            }
+
+            // Determine the placement for the new rectangle
+            bool fits = tryFindBestPlacement(rectangleWidth, rectangleHeight, out placement);
+
+            // If a place for the rectangle could be found, update the height slice table to
+            // mark the region of the rectangle as being taken.
+            if (fits)
+                integrateRectangle(placement.X, rectangleWidth, placement.Y + rectangleHeight);
+
+            return fits;
+        }
+
+        /// <summary>Finds the best position for a rectangle of the given dimensions</summary>
+        /// <param name="rectangleWidth">Width of the rectangle to find a position for</param>
+        /// <param name="rectangleHeight">Height of the rectangle to find a position for</param>
+        /// <param name="placement">Receives the best placement found for the rectangle</param>
+        /// <returns>True if a valid placement for the rectangle could be found</returns>
+        private bool tryFindBestPlacement(
+            int rectangleWidth, int rectangleHeight, out Point placement
+            )
+        {
+            int bestSliceIndex = -1; // Slice index where the best placement was found
+            int bestSliceY = 0; // Y position of the best placement found
+            int bestScore = PackingAreaHeight; // lower == better!
+
+            // This is the counter for the currently checked position. The search works by
+            // skipping from slice to slice, determining the suitability of the location for the
+            // placement of the rectangle.
+            int leftSliceIndex = 0;
+
+            // Determine the slice in which the right end of the rectangle is located when
+            // the rectangle is placed at the far left of the packing area.
+            int rightSliceIndex = this.heightSlices.BinarySearch(
+                new Point(rectangleWidth, 0), SliceStartComparer.Default
+                );
+            if (rightSliceIndex < 0)
+                rightSliceIndex = ~rightSliceIndex;
+
+            while (rightSliceIndex <= this.heightSlices.Count)
+            {
+
+                // Determine the highest slice within the slices covered by the rectangle at
+                // its current placement. We cannot put the rectangle any lower than this without
+                // overlapping the other rectangles.
+                int highest = this.heightSlices[leftSliceIndex].Y;
+                for (int index = leftSliceIndex + 1; index < rightSliceIndex; ++index)
+                    if (this.heightSlices[index].Y > highest)
+                        highest = this.heightSlices[index].Y;
+
+                // Only process this position if it doesn't leave the packing area
+                if ((highest + rectangleHeight <= PackingAreaHeight))
+                {
+                    int score = highest;
+
+                    if (score < bestScore)
+                    {
+                        bestSliceIndex = leftSliceIndex;
+                        bestSliceY = highest;
+                        bestScore = score;
+                    }
+                }
+
+                // Advance the starting slice to the next slice start
+                ++leftSliceIndex;
+                if (leftSliceIndex >= this.heightSlices.Count)
+                    break;
+
+                // Advance the ending slice until we're on the proper slice again, given the new
+                // starting position of the rectangle.
+                int rightRectangleEnd = this.heightSlices[leftSliceIndex].X + rectangleWidth;
+                for (; rightSliceIndex <= this.heightSlices.Count; ++rightSliceIndex)
+                {
+                    int rightSliceStart;
+                    if (rightSliceIndex == this.heightSlices.Count)
+                        rightSliceStart = PackingAreaWidth;
+                    else
+                        rightSliceStart = this.heightSlices[rightSliceIndex].X;
+
+                    // Is this the slice we're looking for?
+                    if (rightSliceStart > rightRectangleEnd)
+                        break;
+                }
+
+                // If we crossed the end of the slice array, the rectangle's right end has left
+                // the packing area, and thus, our search ends.
+                if (rightSliceIndex > this.heightSlices.Count)
+                    break;
+
+            } // while rightSliceIndex <= this.heightSlices.Count
+
+            // Return the best placement we found for this rectangle. If the rectangle
+            // didn't fit anywhere, the slice index will still have its initialization value
+            // of -1 and we can report that no placement could be found.
+            if (bestSliceIndex == -1)
+            {
+                placement = new Point(0, 0);
+                return false;
+            }
+            else
+            {
+                placement = new Point(this.heightSlices[bestSliceIndex].X, bestSliceY);
+                return true;
+            }
+        }
+
+        /// <summary>Integrates a new rectangle into the height slice table</summary>
+        /// <param name="left">Position of the rectangle's left side</param>
+        /// <param name="width">Width of the rectangle</param>
+        /// <param name="bottom">Position of the rectangle's lower side</param>
+        private void integrateRectangle(int left, int width, int bottom)
+        {
+
+            // Find the first slice that is touched by the rectangle
+            int startSlice = this.heightSlices.BinarySearch(
+                new Point(left, 0), SliceStartComparer.Default
+                );
+            int firstSliceOriginalHeight;
+
+            // Since the placement algorithm always places rectangles on the slices,
+            // the binary search should never some up with a miss!
+
+            // We scored a direct hit, so we can replace the slice we have hit
+            firstSliceOriginalHeight = this.heightSlices[startSlice].Y;
+            this.heightSlices[startSlice] = new Point(left, bottom);
+
+            int right = left + width;
+            ++startSlice;
+
+            // Special case, the rectangle started on the last slice, so we cannot
+            // use the start slice + 1 for the binary search and the possibly already
+            // modified start slice height now only remains in our temporary
+            // firstSliceOriginalHeight variable
+            if (startSlice >= this.heightSlices.Count)
+            {
+
+                // If the slice ends within the last slice (usual case, unless it has the
+                // exact same width the packing area has), add another slice to return to
+                // the original height at the end of the rectangle.
+                if (right < PackingAreaWidth)
+                    this.heightSlices.Add(new Point(right, firstSliceOriginalHeight));
+
+            }
+            else
+            { // The rectangle doesn't start on the last slice
+
+                int endSlice = this.heightSlices.BinarySearch(
+                    startSlice, this.heightSlices.Count - startSlice,
+                    new Point(right, 0), SliceStartComparer.Default
+                    );
+
+                // Another direct hit on the final slice's end?
+                if (endSlice > 0)
+                {
+
+                    this.heightSlices.RemoveRange(startSlice, endSlice - startSlice);
+
+                }
+                else
+                { // No direct hit, rectangle ends inside another slice
+
+                    // Make index from negative BinarySearch() result
+                    endSlice = ~endSlice;
+
+                    // Find out to which height we need to return at the right end of
+                    // the rectangle
+                    int returnHeight;
+                    if (endSlice == startSlice)
+                        returnHeight = firstSliceOriginalHeight;
+                    else
+                        returnHeight = this.heightSlices[endSlice - 1].Y;
+
+                    // Remove all slices covered by the rectangle and begin a new slice at its end
+                    // to return back to the height of the slice on which the rectangle ends.
+                    this.heightSlices.RemoveRange(startSlice, endSlice - startSlice);
+                    if (right < PackingAreaWidth)
+                        this.heightSlices.Insert(startSlice, new Point(right, returnHeight));
+
+                } // if endSlice > 0
+
+            } // if startSlice >= this.heightSlices.Count
+
+        }
+
+        /// <summary>Stores the height silhouette of the rectangles</summary>
+        private List<Point> heightSlices;
+
+    }
+
+    /// <summary>Rectangle packer using an algorithm by Javier Arevalo</summary>
+    /// <remarks>
+    ///   <para>
+    ///     Original code by Javier Arevalo (jare at iguanademos dot com). Rewritten
+    ///     to C# / .NET by Markus Ewald (cygon at nuclex dot org). The following comments
+    ///     were written by the original author when he published his algorithm.
+    ///   </para>
+    ///   <para>
+    ///     You have a bunch of rectangular pieces. You need to arrange them in a
+    ///     rectangular surface so that they don't overlap, keeping the total area of the
+    ///     rectangle as small as possible. This is fairly common when arranging characters
+    ///     in a bitmapped font, lightmaps for a 3D engine, and I guess other situations as
+    ///     well.
+    ///   </para>
+    ///   <para>
+    ///     The idea of this algorithm is that, as we add rectangles, we can pre-select
+    ///     "interesting" places where we can try to add the next rectangles. For optimal
+    ///     results, the rectangles should be added in order. I initially tried using area
+    ///     as a sorting criteria, but it didn't work well with very tall or very flat
+    ///     rectangles. I then tried using the longest dimension as a selector, and it
+    ///     worked much better. So much for intuition...
+    ///   </para>
+    ///   <para>
+    ///     These "interesting" places are just to the right and just below the currently
+    ///     added rectangle. The first rectangle, obviously, goes at the top left, the next
+    ///     one would go either to the right or below this one, and so on. It is a weird way
+    ///     to do it, but it seems to work very nicely.
+    ///   </para>
+    ///   <para>
+    ///     The way we search here is fairly brute-force, the fact being that for most
+    ///     offline purposes the performance seems more than adequate. I have generated a
+    ///     japanese font with around 8500 characters and all the time was spent generating
+    ///     the bitmaps.
+    ///   </para>
+    ///   <para>
+    ///     Also, for all we care, we could grow the parent rectangle in a different way
+    ///     than power of two. It just happens that power of 2 is very convenient for
+    ///     graphics hardware textures.
+    ///   </para>
+    ///   <para>
+    ///     I'd be interested in hearing of other approaches to this problem. Make sure
+    ///     to post them on http://www.flipcode.com
+    ///   </para>
+    /// </remarks>
+    public class ArevaloRectanglePacker : RectanglePacker
+    {
+
+        #region class AnchorRankComparer
+
+        /// <summary>Compares the 'rank' of anchoring points</summary>
+        /// <remarks>
+        ///   Anchoring points are potential locations for the placement of new rectangles.
+        ///   Each time a rectangle is inserted, an anchor point is generated on its upper
+        ///   right end and another one at its lower left end. The anchor points are kept
+        ///   in a list that is ordered by their closeness to the upper left corner of the
+        ///   packing area (their 'rank') so the packer favors positions that are closer to
+        ///   the upper left for new rectangles.
+        /// </remarks>
+        private class AnchorRankComparer : IComparer<Point>
+        {
+
+            /// <summary>Provides a default instance for the anchor rank comparer</summary>
+            public static AnchorRankComparer Default = new AnchorRankComparer();
+
+            /// <summary>Compares the rank of two anchors against each other</summary>
+            /// <param name="left">Left anchor point that will be compared</param>
+            /// <param name="right">Right anchor point that will be compared</param>
+            /// <returns>The relation of the two anchor point's ranks to each other</returns>
+            public int Compare(Point left, Point right)
+            {
+                //return Math.Min(left.X, left.Y) - Math.Min(right.X, right.Y);
+                return (left.X + left.Y) - (right.X + right.Y);
+            }
+
+        }
+
+        #endregion
+
+        /// <summary>Initializes a new rectangle packer</summary>
+        /// <param name="packingAreaWidth">Maximum width of the packing area</param>
+        /// <param name="packingAreaHeight">Maximum height of the packing area</param>
+        public ArevaloRectanglePacker(int packingAreaWidth, int packingAreaHeight) :
+            base(packingAreaWidth, packingAreaHeight)
+        {
+
+            this.packedRectangles = new List<Rectangle>();
+            this.anchors = new List<Point>();
+            this.anchors.Add(new Point(0, 0));
+
+            this.actualPackingAreaWidth = 1;
+            this.actualPackingAreaHeight = 1;
+        }
+
+        /// <summary>Tries to allocate space for a rectangle in the packing area</summary>
+        /// <param name="rectangleWidth">Width of the rectangle to allocate</param>
+        /// <param name="rectangleHeight">Height of the rectangle to allocate</param>
+        /// <param name="placement">Output parameter receiving the rectangle's placement</param>
+        /// <returns>True if space for the rectangle could be allocated</returns>
+        public override bool TryPack(
+            int rectangleWidth, int rectangleHeight, out Point placement
+            )
+        {
+
+            // Try to find an anchor where the rectangle fits in, enlarging the packing
+            // area and repeating the search recursively until it fits or the
+            // maximum allowed size is exceeded.
+            int anchorIndex = selectAnchorRecursive(
+                rectangleWidth, rectangleHeight,
+                this.actualPackingAreaWidth, this.actualPackingAreaHeight
+                );
+
+            // No anchor could be found at which the rectangle did fit in
+            if (anchorIndex == -1)
+            {
+                placement = new Point(0, 0);
+                return false;
+            }
+
+            placement = this.anchors[anchorIndex];
+
+            // Move the rectangle either to the left or to the top until it collides with
+            // a neightbouring rectangle. This is done to combat the effect of lining up
+            // rectangles with gaps to the left or top of them because the anchor that
+            // would allow placement there has been blocked by another rectangle
+            optimizePlacement(ref placement, rectangleWidth, rectangleHeight);
+
+            // Remove the used anchor and add new anchors at the upper right and lower left
+            // positions of the new rectangle
+            {
+                // The anchor is only removed if the placement optimization didn't
+                // move the rectangle so far that the anchor isn't blocked anymore
+                bool blocksAnchor =
+                    ((placement.X + rectangleWidth) > this.anchors[anchorIndex].X) &&
+                    ((placement.Y + rectangleHeight) > this.anchors[anchorIndex].Y);
+
+                if (blocksAnchor)
+                    this.anchors.RemoveAt(anchorIndex);
+
+                // Add new anchors at the upper right and lower left coordinates of the rectangle
+                insertAnchor(new Point(placement.X + rectangleWidth, placement.Y));
+                insertAnchor(new Point(placement.X, placement.Y + rectangleHeight));
+            }
+
+            // Finally, we can add the rectangle to our packed rectangles list
+            this.packedRectangles.Add(
+                new Rectangle(placement.X, placement.Y, rectangleWidth, rectangleHeight)
+                );
+
+            return true;
+
+        }
+
+        /// <summary>
+        ///   Optimizes the rectangle's placement by moving it either left or up to fill
+        ///   any gaps resulting from rectangles blocking the anchors of the most optimal
+        ///   placements.
+        /// </summary>
+        /// <param name="placement">Placement to be optimized</param>
+        /// <param name="rectangleWidth">Width of the rectangle to be optimized</param>
+        /// <param name="rectangleHeight">Height of the rectangle to be optimized</param>
+        private void optimizePlacement(
+            ref Point placement, int rectangleWidth, int rectangleHeight
+            )
+        {
+            Rectangle rectangle = new Rectangle(
+                placement.X, placement.Y, rectangleWidth, rectangleHeight
+                );
+
+            // Try to move the rectangle to the left as far as possible
+            int leftMost = placement.X;
+            while (isFree(ref rectangle, PackingAreaWidth, PackingAreaHeight))
+            {
+                leftMost = rectangle.X;
+                --rectangle.X;
+            }
+
+            // Reset rectangle to original position
+            rectangle.X = placement.X;
+
+            // Try to move the rectangle upwards as far as possible
+            int topMost = placement.Y;
+            while (isFree(ref rectangle, PackingAreaWidth, PackingAreaHeight))
+            {
+                topMost = rectangle.Y;
+                --rectangle.Y;
+            }
+
+            // Use the dimension in which the rectangle could be moved farther
+            if ((placement.X - leftMost) > (placement.Y - topMost))
+                placement.X = leftMost;
+            else
+                placement.Y = topMost;
+        }
+
+        /// <summary>
+        ///   Searches for a free anchor and recursively enlarges the packing area
+        ///   if none can be found.
+        /// </summary>
+        /// <param name="rectangleWidth">Width of the rectangle to be placed</param>
+        /// <param name="rectangleHeight">Height of the rectangle to be placed</param>
+        /// <param name="testedPackingAreaWidth">Width of the tested packing area</param>
+        /// <param name="testedPackingAreaHeight">Height of the tested packing area</param>
+        /// <returns>
+        ///   Index of the anchor the rectangle is to be placed at or -1 if the rectangle
+        ///   does not fit in the packing area anymore.
+        /// </returns>
+        private int selectAnchorRecursive(
+            int rectangleWidth, int rectangleHeight,
+            int testedPackingAreaWidth, int testedPackingAreaHeight
+            )
+        {
+
+            // Try to locate an anchor point where the rectangle fits in
+            int freeAnchorIndex = findFirstFreeAnchor(
+                rectangleWidth, rectangleHeight, testedPackingAreaWidth, testedPackingAreaHeight
+                );
+
+            // If a the rectangle fits without resizing packing area (any further in case
+            // of a recursive call), take over the new packing area size and return the
+            // anchor at which the rectangle can be placed.
+            if (freeAnchorIndex != -1)
+            {
+                this.actualPackingAreaWidth = testedPackingAreaWidth;
+                this.actualPackingAreaHeight = testedPackingAreaHeight;
+
+                return freeAnchorIndex;
+            }
+
+            //
+            // If we reach this point, the rectangle did not fit in the current packing
+            // area and our only choice is to try and enlarge the packing area.
+            //
+
+            // For readability, determine whether the packing area can be enlarged
+            // any further in its width and in its height
+            bool canEnlargeWidth = (testedPackingAreaWidth < PackingAreaWidth);
+            bool canEnlargeHeight = (testedPackingAreaHeight < PackingAreaHeight);
+            bool shouldEnlargeHeight =
+                (!canEnlargeWidth) ||
+                (testedPackingAreaHeight < testedPackingAreaWidth);
+
+            // Try to enlarge the smaller of the two dimensions first (unless the smaller
+            // dimension is already at its maximum size). 'shouldEnlargeHeight' is true
+            // when the height was the smaller dimension or when the width is maxed out.
+            if (canEnlargeHeight && shouldEnlargeHeight)
+            {
+
+                // Try to double the height of the packing area
+                return selectAnchorRecursive(
+                    rectangleWidth, rectangleHeight,
+                    testedPackingAreaWidth, Math.Min(testedPackingAreaHeight * 2, PackingAreaHeight)
+                    );
+
+            }
+            else if (canEnlargeWidth)
+            {
+
+                // Try to double the width of the packing area
+                return selectAnchorRecursive(
+                    rectangleWidth, rectangleHeight,
+                    Math.Min(testedPackingAreaWidth * 2, PackingAreaWidth), testedPackingAreaHeight
+                    );
+
+            }
+            else
+            {
+
+                // Both dimensions are at their maximum sizes and the rectangle still
+                // didn't fit. We give up!
+                return -1;
+
+            }
+
+        }
+
+        /// <summary>Locates the first free anchor at which the rectangle fits</summary>
+        /// <param name="rectangleWidth">Width of the rectangle to be placed</param>
+        /// <param name="rectangleHeight">Height of the rectangle to be placed</param>
+        /// <param name="testedPackingAreaWidth">Total width of the packing area</param>
+        /// <param name="testedPackingAreaHeight">Total height of the packing area</param>
+        /// <returns>The index of the first free anchor or -1 if none is found</returns>
+        private int findFirstFreeAnchor(
+            int rectangleWidth, int rectangleHeight,
+            int testedPackingAreaWidth, int testedPackingAreaHeight
+            )
+        {
+            Rectangle potentialLocation = new Rectangle(
+                0, 0, rectangleWidth, rectangleHeight
+                );
+
+            // Walk over all anchors (which are ordered by their distance to the
+            // upper left corner of the packing area) until one is discovered that
+            // can house the new rectangle.
+            for (int index = 0; index < this.anchors.Count; ++index)
+            {
+                potentialLocation.X = this.anchors[index].X;
+                potentialLocation.Y = this.anchors[index].Y;
+
+                // See if the rectangle would fit in at this anchor point
+                if (isFree(ref potentialLocation, testedPackingAreaWidth, testedPackingAreaHeight))
+                    return index;
+            }
+
+            // No anchor points were found where the rectangle would fit in
+            return -1;
+        }
+
+        /// <summary>
+        ///   Determines whether the rectangle can be placed in the packing area
+        ///   at its current location.
+        /// </summary>
+        /// <param name="rectangle">Rectangle whose position to check</param>
+        /// <param name="testedPackingAreaWidth">Total width of the packing area</param>
+        /// <param name="testedPackingAreaHeight">Total height of the packing area</param>
+        /// <returns>True if the rectangle can be placed at its current position</returns>
+        private bool isFree(
+            ref Rectangle rectangle, int testedPackingAreaWidth, int testedPackingAreaHeight
+            )
+        {
+
+            // If the rectangle is partially or completely outside of the packing
+            // area, it can't be placed at its current location
+            bool leavesPackingArea =
+                (rectangle.X < 0) ||
+                (rectangle.Y < 0) ||
+                (rectangle.Right > testedPackingAreaWidth) ||
+                (rectangle.Bottom > testedPackingAreaHeight);
+
+            if (leavesPackingArea)
+                return false;
+
+            // Brute-force search whether the rectangle touches any of the other
+            // rectangles already in the packing area
+            for (int index = 0; index < this.packedRectangles.Count; ++index)
+            {
+
+                if (this.packedRectangles[index].IntersectsWith(rectangle))
+                    return false;
+
+            }
+
+            // Success! The rectangle is inside the packing area and doesn't overlap
+            // with any other rectangles that have already been packed.
+            return true;
+
+        }
+
+        /// <summary>Inserts a new anchor point into the anchor list</summary>
+        /// <param name="anchor">Anchor point that will be inserted</param>
+        /// <remarks>
+        ///   This method tries to keep the anchor list ordered by ranking the anchors
+        ///   depending on the distance from the top left corner in the packing area.
+        /// </remarks>
+        private void insertAnchor(Point anchor)
+        {
+
+            // Find out where to insert the new anchor based on its rank (which is
+            // calculated based on the anchor's distance to the top left corner of
+            // the packing area).
+            //
+            // From MSDN on BinarySearch():
+            //   "If the List does not contain the specified value, the method returns
+            //    a negative integer. You can apply the bitwise complement operation (~) to
+            //    this negative integer to get the index of the first element that is
+            //    larger than the search value."
+            int insertIndex = this.anchors.BinarySearch(anchor, AnchorRankComparer.Default);
+            if (insertIndex < 0)
+                insertIndex = ~insertIndex;
+
+            // Insert the anchor at the index matching its rank
+            this.anchors.Insert(insertIndex, anchor);
+
+        }
+
+        /// <summary>Current width of the packing area</summary>
+        private int actualPackingAreaWidth;
+        /// <summary>Current height of the packing area</summary>
+        private int actualPackingAreaHeight;
+        /// <summary>Rectangles contained in the packing area</summary>
+        private List<Rectangle> packedRectangles;
+        /// <summary>Anchoring points where new rectangles can potentially be placed</summary>
+        private List<Point> anchors;
+
+    }
+
+    public class ImageVariant
+    {
+        public bool GreyScale {get;set;}
+        public int Width {get;set;}
+        public int Height {get;set;}
+        public string CssClassName {get;set;}
+        public string DisplayName {get;set;}
+    }
+
+    public class SpriteImageItem
+    {
+        public Image Image { get; set; }
+        public Size ImageSize { get; set; }
+        public string Name { get; set; }
+        public Point Position { get; set; }
+        public ImageVariant Variant { get; set; }
+        public int ParentIndex { get; set;}
+    }
+
+    public class SCEngineResult: IDisposable
+    {
+        private readonly Bitmap _sprite;
+        private readonly StringBuilder _sbCSS;
+        private readonly StringBuilder _sbHTML;
+        private readonly StringBuilder _sbStaticNames;
+
+        public SCEngineResult(Bitmap sprite)
+        {
+            this._sprite = sprite;
+            this._sbCSS = new StringBuilder();
+            this._sbHTML = new StringBuilder();
+            this._sbStaticNames = new StringBuilder();
+        }
+
+        public StringBuilder SbCss
+        {
+            get { return _sbCSS; }
+        }
+
+        public StringBuilder SbHtml
+        {
+            get { return _sbHTML; }
+        }
+
+        public StringBuilder SbStaticNames
+        {
+            get { return _sbStaticNames; }
+        }
+
+        public void WriteSprite(string fileName)
+        {
+            _sprite.Save(fileName,System.Drawing.Imaging.ImageFormat.Png);
+        }
+
+        public void Dispose()
+        {
+            if (this._sprite !=null)
+                this._sprite.Dispose();
+        }
+    }
+
+    public class SCEngineOptions
+    {
+        public SCEngineOptions()
+        {
+            ImageVariants = new List<ImageVariant>();
+        }
+
+        private string _destinationDirectory;
+        /// <summary>
+        /// Directory to get the images from
+        /// </summary>
+        public string SourceDirectory {get;set;}
+
+        /// <summary>
+        /// Directory for generated .png and css files
+        /// </summary>
+        public string ContentDirectory {get;set;}
+
+        /// <summary>
+        /// prefix used before every css class
+        /// </summary>
+        public string CssClassPrefix { get; set; }
+
+        /// <summary>
+        /// specify packing complexity level (1 to 3)
+        /// </summary>
+        public int BinPackingLevel { get; set; }
+
+        /// <summary>
+        /// The name of the files being generated.
+        /// Four files are being generated: the sprite, the css and a demo html and a cs with static names.
+        /// All of them will have the same name and different file extensions.
+        /// </summary>
+        public string FilesName {get; set;}
+
+        public List<ImageVariant> ImageVariants {get; set;}
+
+        public bool VariantGreyScalePresents
+        {
+            get {
+                foreach(var imv in ImageVariants)
+                    if (imv.GreyScale)
+                        return true;
+                return false;
+            }
+        }
+    }
+#>
+
+
+<#+    // Manager class records the various blocks so it can split them up
+    class Manager
+    {
+        private class Block
+        {
+            public String Name;
+            public int Start, Length;
+        }
+
+        private Block currentBlock;
+        private List<Block> files = new List<Block>();
+        private Block footer = new Block();
+        private Block header = new Block();
+        private ITextTemplatingEngineHost host;
+        private StringBuilder template;
+        protected List<String> generatedFileNames = new List<String>();
+
+        public static Manager Create(ITextTemplatingEngineHost host, StringBuilder template)
+        {
+            return (host is IServiceProvider) ? new VSManager(host, template) : new Manager(host, template);
+        }
+
+        public virtual bool FileOkToWrite(String fileName)
+        {
+            return true;
+        }
+
+        public void KeepGeneratedFile(String name)
+        {
+            name = Path.Combine(Path.GetDirectoryName(host.TemplateFile), name);
+            generatedFileNames.Add(name);
+        }
+    
+        public void StartNewFile(String name)
+        {
+            if (name == null)
+                throw new ArgumentNullException("name");
+            CurrentBlock = new Block { Name = name };
+        }
+
+        public void StartFooter()
+        {
+            CurrentBlock = footer;
+        }
+
+        public void StartHeader()
+        {
+            CurrentBlock = header;
+        }
+
+        public void EndBlock()
+        {
+            if (CurrentBlock == null)
+                return;
+            CurrentBlock.Length = template.Length - CurrentBlock.Start;
+            if (CurrentBlock != header && CurrentBlock != footer)
+                files.Add(CurrentBlock);
+            currentBlock = null;
+        }
+
+        public virtual void Process(bool split)
+        {
+            if (split)
+            {
+                EndBlock();
+                String headerText = template.ToString(header.Start, header.Length);
+                String footerText = template.ToString(footer.Start, footer.Length);
+                String outputPath = Path.GetDirectoryName(host.TemplateFile);
+                files.Reverse();
+                foreach (Block block in files)
+                {
+                    String fileName = Path.Combine(outputPath, block.Name);
+                    String content = headerText + template.ToString(block.Start, block.Length) + footerText;
+                    generatedFileNames.Add(fileName);
+                    CreateFile(fileName, content);
+                    template.Remove(block.Start, block.Length);
+                }
+            }
+        }
+
+        protected virtual void CreateFile(String fileName, String content)
+        {
+            if (IsFileContentDifferent(fileName, content))
+                File.WriteAllText(fileName, content);
+        }
+
+        public virtual String GetCustomToolNamespace(String fileName)
+        {
+            return null;
+        }
+
+        public virtual String DefaultProjectNamespace
+        {
+            get { return null; }
+        }
+
+        protected bool IsFileContentDifferent(String fileName, String newContent)
+        {
+            return !(File.Exists(fileName) && File.ReadAllText(fileName) == newContent);
+        }
+
+        private Manager(ITextTemplatingEngineHost host, StringBuilder template)
+        {
+            this.host = host;
+            this.template = template;
+        }
+
+        private Block CurrentBlock
+        {
+            get { return currentBlock; }
+            set
+            {
+                if (CurrentBlock != null)
+                    EndBlock();
+                if (value != null)
+                    value.Start = template.Length;
+                currentBlock = value;
+            }
+        }
+
+        private class VSManager : Manager
+        {
+            private EnvDTE.ProjectItem templateProjectItem;
+            private EnvDTE.DTE dte;
+            private Action<String> checkOutAction;
+            private Action<IEnumerable<String>> projectSyncAction;
+            private IVsQueryEditQuerySave2 queryEditSave;
+
+            public override String DefaultProjectNamespace
+            {
+                get
+                {
+                    return templateProjectItem.ContainingProject.Properties.Item("DefaultNamespace").Value.ToString();
+                }
+            }
+
+            public override String GetCustomToolNamespace(string fileName)
+            {
+                return dte.Solution.FindProjectItem(fileName).Properties.Item("CustomToolNamespace").Value.ToString();
+            }
+
+            public override void Process(bool split)
+            {
+                if (templateProjectItem.ProjectItems == null)
+                    return;
+                base.Process(split);
+                projectSyncAction.EndInvoke(projectSyncAction.BeginInvoke(generatedFileNames, null, null));
+            }
+
+            public override bool FileOkToWrite(String fileName)
+            {
+                CheckoutFileIfRequired(fileName);
+                return base.FileOkToWrite(fileName);
+            }
+
+            protected override void CreateFile(String fileName, String content)
+            {
+                if (IsFileContentDifferent(fileName, content))
+                {
+                    CheckoutFileIfRequired(fileName);
+                    File.WriteAllText(fileName, content);
+                }
+            }
+
+            internal VSManager(ITextTemplatingEngineHost host, StringBuilder template)
+                : base(host, template)
+            {
+                var hostServiceProvider = (IServiceProvider)host;
+                if (hostServiceProvider == null)
+                    throw new ArgumentNullException("Could not obtain IServiceProvider");
+                dte = (EnvDTE.DTE)hostServiceProvider.GetService(typeof(EnvDTE.DTE));
+                if (dte == null)
+                    throw new ArgumentNullException("Could not obtain DTE from host");
+                templateProjectItem = dte.Solution.FindProjectItem(host.TemplateFile);
+                checkOutAction = (String fileName) => dte.SourceControl.CheckOutItem(fileName);
+                projectSyncAction = (IEnumerable<String> keepFileNames) => ProjectSync(templateProjectItem, keepFileNames);
+                queryEditSave = (IVsQueryEditQuerySave2)hostServiceProvider.GetService(typeof(SVsQueryEditQuerySave));
+            }
+
+            private static void ProjectSync(EnvDTE.ProjectItem templateProjectItem, IEnumerable<String> keepFileNames)
+            {
+                var keepFileNameSet = new HashSet<String>(keepFileNames);
+                var projectFiles = new Dictionary<String, EnvDTE.ProjectItem>();
+                var originalFilePrefix = Path.GetFileNameWithoutExtension(templateProjectItem.get_FileNames(0)) + ".";
+                foreach (EnvDTE.ProjectItem projectItem in templateProjectItem.ProjectItems)
+                    projectFiles.Add(projectItem.get_FileNames(0), projectItem);
+
+                // Remove unused items from the project
+                foreach (var pair in projectFiles)
+                    if (!keepFileNames.Contains(pair.Key) && !(Path.GetFileNameWithoutExtension(pair.Key) + ".").StartsWith(originalFilePrefix))
+                        pair.Value.Delete();
+
+                // Add missing files to the project
+                foreach (String fileName in keepFileNameSet)
+                    if (!projectFiles.ContainsKey(fileName))
+                        templateProjectItem.ProjectItems.AddFromFile(fileName);
+            }
+
+            private void CheckoutFileIfRequired(String fileName)
+            {
+                if (queryEditSave != null)
+                {
+                    uint pfEditVerdict;
+                    queryEditSave.QuerySaveFile(fileName, 0, null, out pfEditVerdict);
+                }
+                else
+                {
+                    var sc = dte.SourceControl;
+                    if (sc != null && sc.IsItemUnderSCC(fileName) && !sc.IsItemCheckedOut(fileName)) 
+                        checkOutAction.EndInvoke(checkOutAction.BeginInvoke(fileName, null, null));
+                }
+            }
+        }
+    }
+#>
