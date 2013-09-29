@@ -157,7 +157,9 @@
     <Compile Include="Global.asax.cs">
       <DependentUpon>Global.asax</DependentUpon>
     </Compile>
-    <Compile Include="Helper\T4ButtonHelper.cs" />
+    <Compile Include="Helper\SpriteButtonHelper.cs">
+      <SubType>Code</SubType>
+    </Compile>
     <Compile Include="Properties\AssemblyInfo.cs" />
     <Content Include="Content\SpriteVar.css">
       <DependentUpon>SpriteVar.tt</DependentUpon>
@@ -168,6 +170,8 @@
     <Content Include="Content\SpriteVar.png">
       <DependentUpon>SpriteVar.tt</DependentUpon>
     </Content>
+    <Content Include="Scripts\jquery-2.0.2.min.js" />
+    <Content Include="Scripts\jquery.unobtrusive-ajax.min.js" />
     <Content Include="Views\Home\Index.cshtml" />
   </ItemGroup>
   <ItemGroup>
@@ -278,7 +282,7 @@
         <WebProjectProperties>
           <UseIIS>True</UseIIS>
           <AutoAssignPort>True</AutoAssignPort>
-          <DevelopmentServerPort>0</DevelopmentServerPort>
+          <DevelopmentServerPort>5384</DevelopmentServerPort>
           <DevelopmentServerVPath>/</DevelopmentServerVPath>
           <IISUrl>http://localhost:5793/</IISUrl>
           <NTLMAuthentication>False</NTLMAuthentication>
