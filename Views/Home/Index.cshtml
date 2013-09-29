@@ -8,32 +8,6 @@
     };
 }
 
-<link href="~/Content/SpriteVar.css" rel="stylesheet" />
-<style type="text/css">
-    .t4button {
-        display: inline-block;
-        text-decoration: none;
-        padding: 4px;
-        border: 1px solid #ddd;
-        border-radius: 6px;
-        box-shadow: #ddd 0 0 6px;
-    }
-
-    .t4icon {
-        display: block;
-        margin: 0 auto;
-        text-indent: -99999px;
-        overflow: hidden;
-    }
-
-    .t4button-text {
-        display: block;
-    }
-    #ajaxbox {
-        border: 1px solid #00f;
-        padding: 6px;
-    }
-</style>
 <h1>T4 Sprite and ActionLink demo</h1>
 <table>
     <tr>
@@ -127,12 +101,4 @@
         <td>@Ajax.SPActionLink(SpriteVar.t4clock, "Clock button original size", "AjaxCall", "Home", commonOptions, null, null, ButtonMode.Disabled | ButtonMode.IconOnly)</td>
     </tr>
 </table>
-<hr />
-Ajax result:
-<i id="ajaxbox"></i>
-<br />
-<br />
-All icons by <a href="http://dryicons.com">http://dryicons.com</a>
 
-<script src="~/Scripts/jquery-2.0.2.min.js"></script>
-<script src="~/Scripts/jquery.unobtrusive-ajax.min.js"></script>
