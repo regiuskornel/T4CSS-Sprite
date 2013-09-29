@@ -1,0 +1,15 @@
+﻿@{
+    ViewBag.Title = "Wrong.cshtml";
+    bool canAccessSaveButton = true;
+}
+
+<h2>Wrong.cshtml</h2>
+@if (canAccessSaveButton)
+{
+    @Html.ActionLink("Save","Index")
+}
+else
+{
+    <i>Save</i>
+}
+
