@@ -102,20 +102,20 @@ namespace MvcApp
                 string iconvariantclass,
                 AjaxHelper ajaxHelper, AjaxOptions ajaxOptions)
         {
-            //A link elkészítése	
+            //Make the link
             string targetUrl = UrlHelper.GenerateUrl(routeName, actionName,
                                 controllerName, null, null, null, routeValues, routeCollection,
                                 requestContext, false);
 
-            //Némi paraméterellenőrzés
+            //Tesing parameters
             if ((status & ButtonMode.IconOnly) != 0 && string.IsNullOrEmpty(icon))
                 throw new Exception("Only icon button without icon, how?");
 
-            //A gomb feliratának előkészítése. Legelőször a védelem, hogy HTML markupot továbbra //se lehessen megadni a helperben
+            //Prepare button caption.
             string caption = HttpUtility.HtmlEncode(linkText);
             bool disabled = (status & ButtonMode.Disabled) != 0;
 
-            //A szöveget egy <span> -be rakjuk, saját CSS osztályával
+            //Insert caption into a <span> with own CSS class
             TagBuilder captionTag = null;
             if ((status & ButtonMode.IconOnly) == 0)
             {
@@ -123,7 +123,8 @@ namespace MvcApp
                 captionTag.AddCssClass("t4button-text");
             }
 
-            //Az ikon is egy <span> -be kerül és a T4 sprite-generátor által előállított fő CSS //osztályt hozzákapcsoljuk. A helper paramétereként érkezett ikon nevet és a variáns //nevet szintén. (ha van)
+            //Also insert icon into a <span>. Link this main CSS class which made by the T4 sprite-generator.
+            //include unique icon name from helper method parameter
             TagBuilder iconTag = null;
             if (!string.IsNullOrEmpty(icon))
             {
@@ -135,11 +136,11 @@ namespace MvcApp
                     iconTag.AddCssClass(iconvariantclass);
             }
 
-            //A gomb számára egy 'körülölelő' wrapper taget készítünk.
-            //Tiltott állapotú gomb <div> -ből készül a normál pedig <a> tagból
+            //Making a wrapper around the caption and icon
+            //Disabled button wil wrap a <div>. And <a> tag for normal button status
             TagBuilder buttonTag = new TagBuilder(disabled ? "div" : "a");
 
-            //Az ikon és a gombfelirat tagjeinek belerenderelése a buttonTag belsejébe
+            //rendering icon and caption <span> into wrapper tag
             if (iconTag == null)
                 buttonTag.InnerHtml = captionTag.ToString(TagRenderMode.Normal);
             else if (captionTag == null)
@@ -148,29 +149,29 @@ namespace MvcApp
                 buttonTag.InnerHtml = iconTag.ToString(TagRenderMode.Normal)
                                     + captionTag.ToString(TagRenderMode.Normal);
 
-            //Ha voltak további HTML attribútumok, akkor azokat hozzáfűzzük
+            //another attributes can arrive from helper method parameter
             buttonTag.MergeAttributes(htmlAttributes);
             buttonTag.Attributes.Add("role", "button");
 
             if (disabled)
             {
                 buttonTag.Attributes.Add("aria-disabled", "true");
-                //Tiltott állapotban az alapértelmezett 'disbled' CSS osztály hozzáadása (ezt a T4 //ikon variánsoknál adtuk meg: .CssClassName= "disabled",
+                //In 'disabled' status adding the default 'disbled' CSS class (we provided in .CssClassName= "disabled" in variant definition)
                 buttonTag.AddCssClass(IconDisabledClass);
             }
             else
             {
-                //Az <a> tag számára az URL 
+                //URL for <a> tag
                 buttonTag.MergeAttribute("href", targetUrl);
                 buttonTag.Attributes.Add("aria-disabled", "false");
 
-                //Ha Ajax helper volt a hívó, akkor az unobtrusive attribútumok hozzáfésülése.
-                //Ennyi az eltérés a Html.ActionLink és az Ajax.ActionLink között.
+                //If this is a Ajax helper call, will include all unobtrusive attributes.
+                //This is all differences between Html.ActionLink and Ajax.ActionLink.
                 if (ajaxHelper != null && ajaxHelper.ViewContext.UnobtrusiveJavaScriptEnabled)
                     buttonTag.MergeAttributes(ajaxOptions.ToUnobtrusiveHtmlAttributes());
             }
 
-            //A title attribútum paraméterezése 
+            //Parametrizing the title attribute
             if ((status & ButtonMode.IconOnly) != 0)
             {
                 buttonTag.AddCssClass("t4button-icon-only");
@@ -185,7 +186,7 @@ namespace MvcApp
 
             buttonTag.AddCssClass("t4button");
 
-            //Az egész renderelése 
+            //Rendering all 
             return buttonTag.ToString(TagRenderMode.Normal);
         }
 
